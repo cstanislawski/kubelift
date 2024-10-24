@@ -1,0 +1,4 @@
+disable=SC2087 # Disable warnings about using EOF without quotes in heredocs, as kubelift utilizes parameter
+disable=SC1090 # Allow non-constant source (kubelift uses dynamic paths)
+disable=SC2140 # Allow mixed quotes in case they are intended
+disable=SC2292 # modern bash works with []
