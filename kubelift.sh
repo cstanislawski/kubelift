@@ -18,18 +18,18 @@ Usage: $0 [operation] [options...]
 Operations:
     create                                  Create a new Kubernetes cluster
     upgrade                                 Upgrade an existing Kubernetes cluster
-    cleanup                                 Remove Kubernetes cluster while preserving CNI
+    cleanup                                 Remove Kubernetes cluster
 
 Options:
-   -h, --help                              Display this help message
-   --noninteractive <bool>                 Enable or disable noninteractive mode
-   --ssh-user <username>                   Username to use for SSH connection
-   --kubernetes-version <version>          Kubernetes version to install (create/upgrade only)
-   --control-plane-ip <ip>                 Control plane node IP address
-   --worker-ips <ip1,ip2,...>              Worker node IP addresses (create only)
-   --enable-control-plane-workloads <bool> Enable control plane scheduling (create only)
-   --skip-reqs <bool>                      Skip minimum requirements validation
-   --nuke <bool>                           Perform deep cleanup (cleanup only)
+   -h, --help                               Display this help message
+   --noninteractive <bool>                  Enable or disable noninteractive mode
+   --ssh-user <username>                    Username to use for SSH connection
+   --kubernetes-version <version>           Kubernetes version to install (create/upgrade only)
+   --control-plane-ip <ip>                  Control plane node IP address
+   --worker-ips <ip1,ip2,...>               Worker node IP addresses (create only)
+   --enable-control-plane-workloads <bool>  Enable control plane scheduling (create only)
+   --skip-reqs <bool>                       Skip minimum requirements validation
+   --nuke <bool>                            Perform deep cleanup (cleanup only)
 EOF
     exit 0
 }
@@ -366,10 +366,13 @@ function join_worker_nodes() {
 function verify_version_compatibility() {
     local nodes_versions
     nodes_versions=$(ssh -o StrictHostKeyChecking=no "$SSH_USER@$CONTROL_PLANE_IP" \
-        kubectl get nodes -o=jsonpath='{range .items[*]}{.status.nodeInfo.kubeletVersion}{"\n"}{end}' | sort -u)
+        "kubectl get nodes -o jsonpath='{.items[*].status.nodeInfo.kubeletVersion}'") || \
+        error "Failed to get cluster version info"
+
+    [[ -z "$nodes_versions" ]] && error "No nodes found in the cluster"
 
     local current_version
-    current_version=$(echo "$nodes_versions" | head -1)
+    current_version=$(echo "$nodes_versions" | tr ' ' '\n' | sort -u | head -1)
 
     [[ $current_version != "v$KUBERNETES_VERSION" ]] || error "Cluster already at version $KUBERNETES_VERSION"
 
@@ -390,6 +393,18 @@ function upgrade_node_components() {
 
     ssh -o StrictHostKeyChecking=no "$SSH_USER@$node_ip" bash << EOF
 set -euo pipefail
+
+KUBERNETES_VERSION="$KUBERNETES_VERSION"
+KUBERNETES_VERSION_REPOSITORY="v\${KUBERNETES_VERSION%.*}"
+
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL "https://pkgs.k8s.io/core:/stable:/\$KUBERNETES_VERSION_REPOSITORY/deb/Release.key" | \
+    gpg --dearmor --yes -o "/etc/apt/keyrings/kubernetes-apt-keyring-\$KUBERNETES_VERSION_REPOSITORY.gpg"
+
+echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring-\$KUBERNETES_VERSION_REPOSITORY.gpg] https://pkgs.k8s.io/core:/stable:/\$KUBERNETES_VERSION_REPOSITORY/deb/ /" | \
+    tee /etc/apt/sources.list.d/kubernetes.list
+
+apt-get update
 
 apt-mark unhold kubeadm && apt-get install -y kubeadm=$KUBERNETES_VERSION-* && apt-mark hold kubeadm
 
