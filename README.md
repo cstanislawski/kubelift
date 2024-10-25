@@ -149,7 +149,6 @@ Some of the alternatives you could consider are:
 
 ## Medium Priority
 
-- Add automated etcd backup and restor
 - Add support for more CNI plugins: Calico, Cilium
 - Cluster configuration templating
 - Add support for MetalLB
