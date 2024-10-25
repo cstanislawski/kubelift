@@ -366,10 +366,13 @@ function join_worker_nodes() {
 function verify_version_compatibility() {
     local nodes_versions
     nodes_versions=$(ssh -o StrictHostKeyChecking=no "$SSH_USER@$CONTROL_PLANE_IP" \
-        kubectl get nodes -o=jsonpath='{range .items[*]}{.status.nodeInfo.kubeletVersion}{"\n"}{end}' | sort -u)
+        "kubectl get nodes -o jsonpath='{.items[*].status.nodeInfo.kubeletVersion}'") || \
+        error "Failed to get cluster version info"
+
+    [[ -z "$nodes_versions" ]] && error "No nodes found in the cluster"
 
     local current_version
-    current_version=$(echo "$nodes_versions" | head -1)
+    current_version=$(echo "$nodes_versions" | tr ' ' '\n' | sort -u | head -1)
 
     [[ $current_version != "v$KUBERNETES_VERSION" ]] || error "Cluster already at version $KUBERNETES_VERSION"
 
