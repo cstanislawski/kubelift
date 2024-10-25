@@ -18,18 +18,18 @@ Usage: $0 [operation] [options...]
 Operations:
     create                                  Create a new Kubernetes cluster
     upgrade                                 Upgrade an existing Kubernetes cluster
-    cleanup                                 Remove Kubernetes cluster while preserving CNI
+    cleanup                                 Remove Kubernetes cluster
 
 Options:
-   -h, --help                              Display this help message
-   --noninteractive <bool>                 Enable or disable noninteractive mode
-   --ssh-user <username>                   Username to use for SSH connection
-   --kubernetes-version <version>          Kubernetes version to install (create/upgrade only)
-   --control-plane-ip <ip>                 Control plane node IP address
-   --worker-ips <ip1,ip2,...>              Worker node IP addresses (create only)
-   --enable-control-plane-workloads <bool> Enable control plane scheduling (create only)
-   --skip-reqs <bool>                      Skip minimum requirements validation
-   --nuke <bool>                           Perform deep cleanup (cleanup only)
+   -h, --help                               Display this help message
+   --noninteractive <bool>                  Enable or disable noninteractive mode
+   --ssh-user <username>                    Username to use for SSH connection
+   --kubernetes-version <version>           Kubernetes version to install (create/upgrade only)
+   --control-plane-ip <ip>                  Control plane node IP address
+   --worker-ips <ip1,ip2,...>               Worker node IP addresses (create only)
+   --enable-control-plane-workloads <bool>  Enable control plane scheduling (create only)
+   --skip-reqs <bool>                       Skip minimum requirements validation
+   --nuke <bool>                            Perform deep cleanup (cleanup only)
 EOF
     exit 0
 }
