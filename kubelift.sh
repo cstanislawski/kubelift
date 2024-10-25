@@ -10,6 +10,7 @@ KUBERNETES_VERSION=""
 CONTROL_PLANE_IP=""
 WORKER_IPS=""
 ENABLE_CONTROL_PLANE_WORKLOADS=false
+NUKE=false
 
 function print_usage() {
     cat << EOF
@@ -28,6 +29,7 @@ Options:
    --worker-ips <ip1,ip2,...>              Worker node IP addresses (create only)
    --enable-control-plane-workloads <bool> Enable control plane scheduling (create only)
    --skip-reqs <bool>                      Skip minimum requirements validation
+   --nuke <bool>                           Perform deep cleanup (cleanup only)
 EOF
     exit 0
 }
@@ -76,6 +78,7 @@ function parse_args() {
                 ;;
             --enable-control-plane-workloads) ENABLE_CONTROL_PLANE_WORKLOADS="$2"; shift 2 ;;
             --skip-reqs) SKIP_REQS="$2"; shift 2 ;;
+            --nuke) NUKE="$2"; shift 2 ;;
             *) error "Unknown parameter $1" ;;
         esac
     done
@@ -94,6 +97,10 @@ function validate_input() {
     if [[ $OPERATION == "create" ]]; then
         [[ -z $WORKER_IPS || $WORKER_IPS =~ ^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+,)*[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || error "Invalid worker nodes IPs"
         [[ $ENABLE_CONTROL_PLANE_WORKLOADS =~ ^(true|false)$ ]] || error "Invalid control plane scheduling value"
+    fi
+
+    if [[ $OPERATION == "cleanup" ]]; then
+        [[ $NUKE =~ ^(true|false)$ ]] || error "Invalid nuke value"
     fi
 }
 
@@ -511,14 +518,110 @@ function remove_control_plane() {
     cleanup_node "$CONTROL_PLANE_IP"
 }
 
-function cleanup_node() {
+function deep_clean_node() {
     local node_ip=$1
     ssh -o StrictHostKeyChecking=no "$SSH_USER@$node_ip" bash << 'EOF'
+set -euo pipefail
+
+systemctl stop kubelet containerd docker || true
+
+kubeadm reset -f || true
+
+for mount in $(mount | grep tmpfs | grep '/var/lib/kubelet' | awk '{ print $3 }'); do
+    umount "$mount" || true
+done
+
+rm -rf \
+    /etc/kubernetes \
+    /var/lib/kubelet \
+    /var/lib/etcd \
+    /var/lib/dockershim \
+    /var/run/kubernetes \
+    /var/lib/cni \
+    /etc/cni \
+    /opt/cni \
+    /var/lib/containerd \
+    /var/lib/docker \
+    /etc/containerd \
+    /etc/docker \
+    $HOME/.kube \
+    /root/.kube
+
+ip link set docker0 down || true
+ip link delete docker0 || true
+ip link set cni0 down || true
+ip link delete cni0 || true
+ip link set flannel.1 down || true
+ip link delete flannel.1 || true
+ip link set weave down || true
+ip link delete weave || true
+
+iptables -F && iptables -t nat -F && iptables -t mangle -F && iptables -X
+ip6tables -F && ip6tables -t nat -F && ip6tables -t mangle -F && ip6tables -X
+
+for pkg in kubectl kubeadm kubelet kubernetes-cni containerd docker-ce docker-ce-cli; do
+    apt-mark unhold "$pkg" || true
+    DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y "$pkg" || true
+done
+
+apt-get autoremove -y
+apt-get clean
+
+rm -f /etc/apt/sources.list.d/kubernetes.list
+rm -f /etc/apt/sources.list.d/docker.list
+rm -f /etc/apt/keyrings/kubernetes*.gpg
+rm -f /etc/apt/keyrings/docker*.gpg
+
+if [[ -f /etc/fstab.bak.* ]]; then
+    cp "$(ls -t /etc/fstab.bak.* | head -1)" /etc/fstab
+fi
+
+systemctl daemon-reload
+EOF
+}
+
+function verify_deep_clean() {
+    local node_ip=$1
+    local failed=false
+
+    local checks=(
+        "systemctl is-active kubelet"
+        "systemctl is-active containerd"
+        "systemctl is-active docker"
+        "which kubectl"
+        "which kubeadm"
+        "which kubelet"
+        "test -d /etc/kubernetes"
+        "test -d /var/lib/kubelet"
+        "test -d /var/lib/etcd"
+    )
+
+    for check in "${checks[@]}"; do
+        if ssh -o StrictHostKeyChecking=no "$SSH_USER@$node_ip" "$check" &>/dev/null; then
+            log "Warning: $check still exists on $node_ip"
+            failed=true
+        fi
+    done
+
+    $failed && error "Deep clean verification failed on $node_ip"
+}
+
+function cleanup_node() {
+    local node_ip=$1
+
+    if [[ $NUKE == "true" ]]; then
+        log "Performing deep clean on $node_ip"
+        deep_clean_node "$node_ip"
+        verify_deep_clean "$node_ip"
+    else
+        log "Performing standard cleanup on $node_ip"
+        ssh -o StrictHostKeyChecking=no "$SSH_USER@$node_ip" bash << 'EOF'
 kubeadm reset -f
 rm -rf $HOME/.kube
 ip link delete cni0 || true
 ip link delete flannel.1 || true
 EOF
+    fi
 }
 
 function cleanup_cluster() {
