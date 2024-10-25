@@ -6,28 +6,59 @@ Kubernetes cluster operations over SSH
 
 The goal of this project is to provide a simple tool to provision a Kubernetes cluster on VMs over SSH. By going with a script-based approach, you can easily customize the installation process to fit your needs, and fail fast if something goes wrong.
 
-kubelift aims to be a bridge between the manual operations with `kubeadm` and the automated installation with `kubespray` requiring a lot of setup.
-
-## Overview
-
-kubelift provides scripts for automating the management of Kubernetes clusters over SSH. The scripts handle cluster creation, upgrades, and cleanup tasks, and are designed to work with both on-premise and cloud-based virtual machines.
+`kubelift` aims to be a bridge between the manual operations with `kubeadm` and the automated installation with `kubespray` requiring a lot of setup.
 
 ## Requirements
 
-- A set of VMs with SSH access
+- A set of VM(s) with SSH access
 - Sudo privileges without password prompt (NOPASSWD in sudoers) for the SSH user
 - Internet connectivity on all nodes
 
 ## Features
 
-- **Noninteractive mode**: Supports non-interactive execution for automated deployments
-- **SSH-based Operations**: All operations are performed over SSH for remote management
-- **Input Validation**: Thorough input validation ensures all provided parameters are correct
-- **Modular Design**: Scripts are organized into functions for better maintainability
+- **Noninteractive mode** for automated operations
+- **SSH-based Operations** for secure remote management
+- **Seamless Upgrades** for managing cluster lifecycle
+- **Input Validation** ensures all provided parameters are correct
+- **Modular Design** for better maintainability
+
+## Installation
+
+### Quick Setup
+
+```bash
+curl -LO https://raw.githubusercontent.com/cstanislawski/kubelift/main/kubelift.sh
+chmod +x kubelift.sh
+```
+
+### System-wide Installation
+
+```bash
+sudo curl -L https://raw.githubusercontent.com/cstanislawski/kubelift/main/kubelift.sh -o /usr/local/bin/kubelift
+sudo chmod +x /usr/local/bin/kubelift
+```
 
 ## Usage
 
-Before running any operations, copy `.env.example` to `.env` and fill in the required values.
+```bash
+kubelift --help
+Usage: /usr/local/bin/kubelift [operation] [options...]
+Operations:
+    create                                  Create a new Kubernetes cluster
+    upgrade                                 Upgrade an existing Kubernetes cluster
+    cleanup                                 Remove Kubernetes cluster
+
+Options:
+   -h, --help                               Display this help message
+   --noninteractive <bool>                  Enable or disable noninteractive mode
+   --ssh-user <username>                    Username to use for SSH connection
+   --kubernetes-version <version>           Kubernetes version to install (create/upgrade only)
+   --control-plane-ip <ip>                  Control plane node IP address
+   --worker-ips <ip1,ip2,...>               Worker node IP addresses (create only)
+   --enable-control-plane-workloads <bool>  Enable control plane scheduling (create only)
+   --skip-reqs <bool>                       Skip minimum requirements validation
+   --nuke <bool>                            Perform deep cleanup (cleanup only)
+```
 
 ### Cluster Creation
 
@@ -79,7 +110,8 @@ The upgrade operation will:
 ./kubelift.sh cleanup \
     --noninteractive <true|false> \
     --ssh-user <username> \
-    --control-plane-ip <ip>
+    --control-plane-ip <ip> \
+    --nuke <true|false> # Optional
 ```
 
 The cleanup operation will:
@@ -124,7 +156,7 @@ The scripts use the following environment variables:
 
 Some of the alternatives you could consider are:
 
-- [kubeadm](https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm/) - a tool built to provide best-practice "fast paths" for creating Kubernetes clusters, which kubelift is based on
+- [kubeadm](https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm/) - a tool built to provide best-practice "fast paths" for creating Kubernetes clusters, which `kubelift` is based on
 - [kubespray](https://github.com/kubernetes-sigs/kubespray) - a set of Ansible playbooks to provision a Kubernetes cluster
 - [kubean](https://github.com/kubean-io/kubean) - an operator for cluster lifecycle management based on kubespray
 - [kops](https://github.com/kubernetes/kops) - CLI to create, destroy, upgrade and maintain production-grade Kubernetes clusters hosted on AWS/GCP with more providers in Beta/Alpha
@@ -151,6 +183,7 @@ Some of the alternatives you could consider are:
 - Add support for more CNI plugins: Calico, Cilium
 - Cluster configuration templating
 - Add support for HA control plane
+- Add downgrades support
 - Assume presence of the flag equals true (e.g. --noninteractive) if the flag is present
 - Add k3s support
 - Add support for more Linux distributions
