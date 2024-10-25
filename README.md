@@ -142,7 +142,6 @@ Some of the alternatives you could consider are:
 
 ## High Priority
 
-- Add support for nuking the whole cluster - not just kubeadm reset, remove all traces
 - Improve error handling and reporting
 - Add more input validation
 - Allow custom CIDR ranges
