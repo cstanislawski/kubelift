@@ -1,6 +1,6 @@
 # kubelift
 
-kubernetes cluster operations over SSH
+Kubernetes cluster operations over SSH
 
 ## Goal
 
