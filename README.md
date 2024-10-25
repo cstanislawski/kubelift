@@ -153,7 +153,6 @@ Some of the alternatives you could consider are:
 - Add automated etcd backup and restor
 - Add support for more CNI plugins: Calico, Cilium
 - Add support for customizing the kubelet configuration
-- More post-installation/upgrade checks
 - Cluster configuration templating
 - Add support for MetalLB
 - Add support for HA control plane
