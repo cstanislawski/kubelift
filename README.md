@@ -159,4 +159,3 @@ Some of the alternatives you could consider are:
 ## Low Priority
 
 - Air-gapped environments support
-- Add performance tuning options
