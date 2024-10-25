@@ -752,7 +752,6 @@ EOF
 }
 
 function cleanup_cluster() {
-    # First, try to get worker nodes from kubectl if possible
     local worker_nodes=""
     if ssh -o StrictHostKeyChecking=no "$SSH_USER@$CONTROL_PLANE_IP" kubectl get nodes &>/dev/null; then
         worker_nodes=$(ssh -o StrictHostKeyChecking=no "$SSH_USER@$CONTROL_PLANE_IP" \
@@ -760,14 +759,12 @@ function cleanup_cluster() {
             grep -v "$CONTROL_PLANE_IP") || true
     fi
 
-    # Clean up worker nodes if we found any
     for ip in $worker_nodes; do
         [[ -z $ip ]] && continue
         log "Cleaning up worker: $ip"
         cleanup_node "$ip"
     done
 
-    # Always clean up control plane
     log "Cleaning up control plane"
     cleanup_node "$CONTROL_PLANE_IP"
 }
