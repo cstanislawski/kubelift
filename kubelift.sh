@@ -43,17 +43,6 @@ function error() {
     exit 1
 }
 
-function parse_operation() {
-    [[ $# -lt 1 ]] && print_usage
-
-    OPERATION=$1; shift
-    case $OPERATION in
-        create|upgrade) ;;
-        *) error "Invalid operation: $OPERATION" ;;
-    esac
-    return $#
-}
-
 function parse_args() {
     [[ $# -eq 0 || $1 == "-h" || $1 == "--help" ]] && print_usage
 
@@ -71,9 +60,7 @@ function parse_args() {
             --kubernetes-version) KUBERNETES_VERSION="$2"; shift 2 ;;
             --control-plane-ip) CONTROL_PLANE_IP="$2"; shift 2 ;;
             --worker-ips)
-                if [[ $OPERATION == "create" ]]; then
-                    WORKER_IPS="$2"
-                fi
+                [[ $OPERATION == "create" ]] && WORKER_IPS="$2"
                 shift 2
                 ;;
             --enable-control-plane-workloads) ENABLE_CONTROL_PLANE_WORKLOADS="$2"; shift 2 ;;
@@ -129,20 +116,20 @@ function validate_node_resources() {
     local min_disk=$4
     local node_type=$5
 
-    local resources cpu_cores mem_gb disk_gb
-    resources=$(get_node_resources "$node_ip") || return 1
-    read -r cpu_cores mem_gb disk_gb <<< "$resources"
+            local resources cpu_cores mem_gb disk_gb
+            resources=$(get_node_resources "$node_ip") || return 1
+            read -r cpu_cores mem_gb disk_gb <<< "$resources"
 
-    local errors=()
-    ((cpu_cores >= min_cpu)) || errors+=("CPU cores: $cpu_cores (minimum $min_cpu)")
-    ((mem_gb >= min_mem)) || errors+=("Memory: ${mem_gb}GB (minimum ${min_mem}GB)")
-    ((disk_gb >= min_disk)) || errors+=("Disk: ${disk_gb}GB (minimum ${min_disk}GB)")
+            local errors=()
+            ((cpu_cores >= min_cpu)) || errors+=("CPU cores: $cpu_cores (minimum $min_cpu)")
+            ((mem_gb >= min_mem)) || errors+=("Memory: ${mem_gb}GB (minimum ${min_mem}GB)")
+            ((disk_gb >= min_disk)) || errors+=("Disk: ${disk_gb}GB (minimum ${min_disk}GB)")
 
-    if ((${#errors[@]} > 0)); then
-        log "$node_type ($node_ip) validation failed:"
-        printf " - %s\n" "${errors[@]}" >&2
-        return 1
-    fi
+            if ((${#errors[@]} > 0)); then
+                log "$node_type ($node_ip) validation failed:"
+                printf " - %s\n" "${errors[@]}" >&2
+                return 1
+            fi
 
     return 0
 }
@@ -258,13 +245,13 @@ if ! command -v docker &> /dev/null || ! docker info &> /dev/null; then
     install -m 0755 -d /etc/apt/keyrings
 
     if [[ ! -f /etc/apt/keyrings/docker.asc ]]; then
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor --yes -o /etc/apt/keyrings/docker.asc
-        chmod a+r /etc/apt/keyrings/docker.asc
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor --yes -o /etc/apt/keyrings/docker.asc
+    chmod a+r /etc/apt/keyrings/docker.asc
     fi
 
     if [[ ! -f /etc/apt/sources.list.d/docker.list ]]; then
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-            tee /etc/apt/sources.list.d/docker.list > /dev/null
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+        tee /etc/apt/sources.list.d/docker.list > /dev/null
     fi
 
     apt-get update
@@ -282,7 +269,7 @@ version = 2
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
   SystemdCgroup = true
 EOC
-    systemctl restart containerd
+systemctl restart containerd
 fi
 EOF
 }
@@ -348,14 +335,14 @@ EOF
 
 function install_cni() {
     ssh -o StrictHostKeyChecking=no "$SSH_USER@$CONTROL_PLANE_IP" bash << 'EOF'
-curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-kubectl create ns kube-flannel
-kubectl label --overwrite ns kube-flannel pod-security.kubernetes.io/enforce=privileged
+        kubectl create ns kube-flannel
+        kubectl label --overwrite ns kube-flannel pod-security.kubernetes.io/enforce=privileged
 
-helm repo add flannel https://flannel-io.github.io/flannel
-helm repo update
-helm install flannel --set podCidr=10.244.0.0/16 --namespace kube-flannel flannel/flannel
+        helm repo add flannel https://flannel-io.github.io/flannel
+        helm repo update
+        helm install flannel --set podCidr=10.244.0.0/16 --namespace kube-flannel flannel/flannel
 EOF
 }
 
