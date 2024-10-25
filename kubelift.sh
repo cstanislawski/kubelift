@@ -14,7 +14,7 @@ NUKE=false
 
 function print_usage() {
     cat << EOF
-Usage: $0 [operation] [options...]
+Usage: $(basename "$0") <operation> [options]
 Operations:
     create                                  Create a new Kubernetes cluster
     upgrade                                 Upgrade an existing Kubernetes cluster
