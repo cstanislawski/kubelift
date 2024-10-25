@@ -335,14 +335,22 @@ EOF
 
 function install_cni() {
     ssh -o StrictHostKeyChecking=no "$SSH_USER@$CONTROL_PLANE_IP" bash << 'EOF'
-        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+if ! command -v helm &> /dev/null; then
+    curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+fi
 
-        kubectl create ns kube-flannel
-        kubectl label --overwrite ns kube-flannel pod-security.kubernetes.io/enforce=privileged
+kubectl create ns kube-flannel
+kubectl label --overwrite ns kube-flannel pod-security.kubernetes.io/enforce=privileged
 
-        helm repo add flannel https://flannel-io.github.io/flannel
-        helm repo update
-        helm install flannel --set podCidr=10.244.0.0/16 --namespace kube-flannel flannel/flannel
+if ! helm repo list | grep -q '^flannel\s'; then
+    helm repo add flannel https://flannel-io.github.io/flannel
+    helm repo update
+fi
+
+helm install flannel \
+    --set podCidr=10.244.0.0/16 \
+    --namespace kube-flannel \
+    flannel/flannel
 EOF
 }
 
@@ -709,6 +717,12 @@ for pkg in kubectl kubeadm kubelet kubernetes-cni containerd.io docker-ce docker
 done
 $packages_exist && exit 1
 
+# Remove helm and all repos
+if command -v helm &> /dev/null; then
+    helm repo list | tail -n +2 | awk '{print $1}' | xargs -r helm repo remove
+    rm $(command -v helm)
+fi
+
 exit 0
 EOF
 
@@ -730,6 +744,10 @@ function cleanup_node() {
     else
         log "Performing standard cleanup on $node_ip"
         ssh -o StrictHostKeyChecking=no "$SSH_USER@$node_ip" bash << 'EOF'
+if [[ -f $HOME/.kube/config ]] && command -v helm &> /dev/null; then
+    helm repo list | tail -n +2 | awk '{print $1}' | xargs -r helm repo remove
+fi
+
 kubeadm reset -f
 rm -rf $HOME/.kube
 ip link delete cni0 || true
