@@ -237,7 +237,10 @@ if grep -q "^/[^ ]* *none *swap" /proc/mounts; then
 fi
 
 modprobe br_netfilter
-echo "net.bridge.bridge-nf-call-iptables = 1" | tee -a /etc/sysctl.conf
+
+grep -q "^net.bridge.bridge-nf-call-iptables = 1" /etc/sysctl.conf || \
+    echo "net.bridge.bridge-nf-call-iptables = 1" >> /etc/sysctl.conf
+
 sysctl -p
 EOF
 }
@@ -604,6 +607,9 @@ rm -f /etc/apt/keyrings/docker*.gpg
 
 # Remove binaries
 rm -f /usr/bin/kubectl /usr/bin/kubeadm /usr/bin/kubelet
+
+sed -i '/^net.bridge.bridge-nf-call-iptables = 1$/d' /etc/sysctl.conf
+sysctl -p
 
 # Restore original fstab if backup exists
 if [[ -f /etc/fstab.bak.* ]]; then
