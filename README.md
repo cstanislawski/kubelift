@@ -151,7 +151,6 @@ Some of the alternatives you could consider are:
 
 - Add support for more CNI plugins: Calico, Cilium
 - Cluster configuration templating
-- Add support for MetalLB
 - Add support for HA control plane
 - Assume presence of the flag equals true (e.g. --noninteractive) if the flag is present
 - Add k3s support
