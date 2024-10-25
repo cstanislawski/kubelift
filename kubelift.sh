@@ -522,7 +522,7 @@ function deep_clean_node() {
 set -euo pipefail
 
 # Kill all kubernetes-related processes
-for proc in kubelet kube-apiserver kube-controller-manager kube-scheduler kube-proxy containerd docker flannel; do
+for proc in kubelet kube-apiserver kube-controller-manager kube-scheduler kube-proxy containerd docker flannel coredns; do
     pkill -9 "$proc" || true
 done
 
@@ -559,6 +559,9 @@ rm -rf \
     $HOME/.kube \
     /root/.kube
 
+# Clean up network namespaces that might be used by CoreDNS/pods
+ip netns list | grep -E 'cni-|coredns' | xargs -r ip netns delete
+
 # Clean up network interfaces
 ip link set docker0 down 2>/dev/null || true
 ip link delete docker0 2>/dev/null || true
@@ -578,7 +581,7 @@ crictl rmi --all 2>/dev/null || true
 docker system prune -af 2>/dev/null || true
 
 # Remove all K8s and container packages
-for pkg in kubectl kubeadm kubelet kubernetes-cni containerd.io containerd docker-ce docker-ce-cli docker-buildx-plugin docker-compose-plugin docker-ce-rootless-extras; do
+for pkg in kubectl kubeadm kubelet kubernetes-cni containerd.io containerd docker-ce docker-ce-cli docker-buildx-plugin docker-compose-plugin docker-ce-rootless-extras coredns; do
     apt-mark unhold "$pkg" 2>/dev/null || true
 done
 
