@@ -142,7 +142,6 @@ Some of the alternatives you could consider are:
 
 ## High Priority
 
-- Improve error handling and reporting
 - Allow custom CIDR ranges
 - Add support for additional logging output to a file
 - Add dry-run mode for operations
