@@ -10,6 +10,7 @@ KUBERNETES_VERSION=""
 CONTROL_PLANE_IP=""
 WORKER_IPS=""
 ENABLE_CONTROL_PLANE_WORKLOADS=false
+NUKE=false
 
 function print_usage() {
     cat << EOF
@@ -28,6 +29,7 @@ Options:
    --worker-ips <ip1,ip2,...>              Worker node IP addresses (create only)
    --enable-control-plane-workloads <bool> Enable control plane scheduling (create only)
    --skip-reqs <bool>                      Skip minimum requirements validation
+   --nuke <bool>                           Perform deep cleanup (cleanup only)
 EOF
     exit 0
 }
@@ -39,17 +41,6 @@ function log() {
 function error() {
     log "ERROR: $1"
     exit 1
-}
-
-function parse_operation() {
-    [[ $# -lt 1 ]] && print_usage
-
-    OPERATION=$1; shift
-    case $OPERATION in
-        create|upgrade) ;;
-        *) error "Invalid operation: $OPERATION" ;;
-    esac
-    return $#
 }
 
 function parse_args() {
@@ -69,13 +60,12 @@ function parse_args() {
             --kubernetes-version) KUBERNETES_VERSION="$2"; shift 2 ;;
             --control-plane-ip) CONTROL_PLANE_IP="$2"; shift 2 ;;
             --worker-ips)
-                if [[ $OPERATION == "create" ]]; then
-                    WORKER_IPS="$2"
-                fi
+                [[ $OPERATION == "create" ]] && WORKER_IPS="$2"
                 shift 2
                 ;;
             --enable-control-plane-workloads) ENABLE_CONTROL_PLANE_WORKLOADS="$2"; shift 2 ;;
             --skip-reqs) SKIP_REQS="$2"; shift 2 ;;
+            --nuke) NUKE="$2"; shift 2 ;;
             *) error "Unknown parameter $1" ;;
         esac
     done
@@ -95,89 +85,75 @@ function validate_input() {
         [[ -z $WORKER_IPS || $WORKER_IPS =~ ^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+,)*[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || error "Invalid worker nodes IPs"
         [[ $ENABLE_CONTROL_PLANE_WORKLOADS =~ ^(true|false)$ ]] || error "Invalid control plane scheduling value"
     fi
+
+    if [[ $OPERATION == "cleanup" ]]; then
+        [[ $NUKE =~ ^(true|false)$ ]] || error "Invalid nuke value"
+    fi
 }
 
 function get_node_resources() {
     local node_ip=$1
-    local resources
+    local cpu_cores mem_gb disk_gb
 
-    resources=$(ssh -o StrictHostKeyChecking=no "$SSH_USER@$node_ip" bash << 'EOF'
-    {
+    if ! read -r cpu_cores mem_gb disk_gb < <(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "$SSH_USER@$node_ip" bash << 'ENDSSH'
         cpu_cores=$(nproc)
-        mem_gb=$(($(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024 / 1024))
-        disk_gb=$(df -BG / | awk 'NR==2 {sub(/G/,"",$4); print $4}')
-
+        mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+        mem_gb=$((mem_kb / 1024 / 1024))
+        disk_gb=$(df -B1G / | awk 'NR==2 {print $4}')
         echo "$cpu_cores $mem_gb $disk_gb"
-    }
-EOF
-    )
+ENDSSH
+    ); then
+        error "Failed to retrieve resources from node $node_ip"
+    fi
 
-    echo "$resources"
+    echo "$cpu_cores $mem_gb $disk_gb"
 }
 
-function validate_control_plane_resources() {
+function validate_node_resources() {
     local node_ip=$1
-    local resources cpu_cores mem_gb disk_gb
+    local min_cpu=$2
+    local min_mem=$3
+    local min_disk=$4
+    local node_type=$5
 
-    resources=$(get_node_resources "$node_ip")
-    read -r cpu_cores mem_gb disk_gb <<< "$resources"
+            local resources cpu_cores mem_gb disk_gb
+            resources=$(get_node_resources "$node_ip") || return 1
+            read -r cpu_cores mem_gb disk_gb <<< "$resources"
 
-    local errors=()
+            local errors=()
+            ((cpu_cores >= min_cpu)) || errors+=("CPU cores: $cpu_cores (minimum $min_cpu)")
+            ((mem_gb >= min_mem)) || errors+=("Memory: ${mem_gb}GB (minimum ${min_mem}GB)")
+            ((disk_gb >= min_disk)) || errors+=("Disk: ${disk_gb}GB (minimum ${min_disk}GB)")
 
-    ((cpu_cores >= 2)) || errors+=("Insufficient CPU cores: $cpu_cores (minimum 2)")
-    ((mem_gb >= 2)) || errors+=("Insufficient memory: ${mem_gb}GB (minimum 2GB)")
-    ((disk_gb >= 50)) || errors+=("Insufficient disk space: ${disk_gb}GB (minimum 50GB)")
+            if ((${#errors[@]} > 0)); then
+                log "$node_type ($node_ip) validation failed:"
+                printf " - %s\n" "${errors[@]}" >&2
+                return 1
+            fi
 
-    if ((${#errors[@]} > 0)); then
-        printf "Control plane node (%s) validation failed:\n" "$node_ip" >&2
-        printf " - %s\n" "${errors[@]}" >&2
-        return 1
-    fi
-}
-
-function validate_worker_node_resources() {
-    local node_ip=$1
-    local resources cpu_cores mem_gb disk_gb
-
-    resources=$(get_node_resources "$node_ip")
-    read -r cpu_cores mem_gb disk_gb <<< "$resources"
-
-    local errors=()
-
-    ((cpu_cores >= 1)) || errors+=("Insufficient CPU cores: $cpu_cores (minimum 1)")
-    ((mem_gb >= 1)) || errors+=("Insufficient memory: ${mem_gb}GB (minimum 1GB)")
-    ((disk_gb >= 20)) || errors+=("Insufficient disk space: ${disk_gb}GB (minimum 20GB)")
-
-    if ((${#errors[@]} > 0)); then
-        printf "Worker node (%s) validation failed:\n" "$node_ip" >&2
-        printf " - %s\n" "${errors[@]}" >&2
-        return 1
-    fi
+    return 0
 }
 
 function validate_cluster_resources() {
     $SKIP_REQS && return 0
 
-    local validation_failed=false
+    local failed=0
+    log "Validating cluster node resources"
 
-    log "Validating control plane resources"
-    validate_control_plane_resources "$CONTROL_PLANE_IP" || validation_failed=true
+    if ! validate_node_resources "$CONTROL_PLANE_IP" 2 2 50 "Control plane"; then
+        failed=1
+    fi
 
     if [[ -n $WORKER_IPS ]]; then
-        log "Validating worker nodes resources"
-        local pids=()
-
         for ip in ${WORKER_IPS//,/ }; do
-            validate_worker_node_resources "$ip" &
-            pids+=($!)
-        done
-
-        for pid in "${pids[@]}"; do
-            wait "$pid" || validation_failed=true
+            if ! validate_node_resources "$ip" 1 1 20 "Worker node"; then
+                failed=1
+            fi
         done
     fi
 
-    $validation_failed && error "Resource validation failed"
+    ((failed)) && error "Resource validation failed"
+    return 0
 }
 
 function prompt_confirmation() {
@@ -212,10 +188,15 @@ function verify_node_connectivity() {
 }
 
 function verify_cluster_connectivity() {
-    local all_nodes
+    local all_nodes timeout=5
     all_nodes=$(get_cluster_nodes)
+    log "Verifying cluster connectivity"
 
     for ip in ${all_nodes//,/ }; do
+        if ! timeout "$timeout" bash -c "</dev/tcp/$ip/22" 2>/dev/null; then
+            error "Node $ip is not reachable on port 22"
+        fi
+
         verify_ssh_access "$ip"
     done
 
@@ -243,7 +224,10 @@ if grep -q "^/[^ ]* *none *swap" /proc/mounts; then
 fi
 
 modprobe br_netfilter
-echo "net.bridge.bridge-nf-call-iptables = 1" | tee -a /etc/sysctl.conf
+
+grep -q "^net.bridge.bridge-nf-call-iptables = 1" /etc/sysctl.conf || \
+    echo "net.bridge.bridge-nf-call-iptables = 1" >> /etc/sysctl.conf
+
 sysctl -p
 EOF
 }
@@ -255,31 +239,38 @@ function setup_container_runtime() {
 set -euo pipefail
 
 apt-get update
-apt-get install -y ca-certificates curl
+apt-get install -y ca-certificates curl gnupg
 
 if ! command -v docker &> /dev/null || ! docker info &> /dev/null; then
     install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /tmp/docker.gpg
-    gpg --dearmor -o /etc/apt/keyrings/docker.asc /tmp/docker.gpg
-    chmod a+r /etc/apt/keyrings/docker.asc
 
+    if [[ ! -f /etc/apt/keyrings/docker.asc ]]; then
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor --yes -o /etc/apt/keyrings/docker.asc
+    chmod a+r /etc/apt/keyrings/docker.asc
+    fi
+
+    if [[ ! -f /etc/apt/sources.list.d/docker.list ]]; then
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
         tee /etc/apt/sources.list.d/docker.list > /dev/null
+    fi
+
     apt-get update
     apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
     systemctl enable --now docker
 fi
 
-cat > /etc/containerd/config.toml << EOC
+mkdir -p /etc/containerd
+if [[ ! -f /etc/containerd/config.toml ]] || ! grep -q "SystemdCgroup = true" /etc/containerd/config.toml; then
+    cat > /etc/containerd/config.toml << EOC
 version = 2
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
   runtime_type = "io.containerd.runc.v2"
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
   SystemdCgroup = true
 EOC
-
 systemctl restart containerd
+fi
 EOF
 }
 
@@ -293,9 +284,13 @@ set -euo pipefail
 KUBERNETES_VERSION="$version"
 KUBERNETES_VERSION_REPOSITORY="v\${KUBERNETES_VERSION%.*}"
 
+install -m 0755 -d /etc/apt/keyrings
+if [[ ! -f "/etc/apt/keyrings/kubernetes-apt-keyring-\$KUBERNETES_VERSION_REPOSITORY.gpg" ]]; then
+    curl -fsSL "https://pkgs.k8s.io/core:/stable:/\$KUBERNETES_VERSION_REPOSITORY/deb/Release.key" | \
+        gpg --dearmor --yes -o "/etc/apt/keyrings/kubernetes-apt-keyring-\$KUBERNETES_VERSION_REPOSITORY.gpg"
+fi
+
 if ! grep -q "\$KUBERNETES_VERSION_REPOSITORY" /etc/apt/sources.list.d/kubernetes.list 2>/dev/null; then
-    curl -fsSL "https://pkgs.k8s.io/core:/stable:/\$KUBERNETES_VERSION_REPOSITORY/deb/Release.key" -o /tmp/kubernetes.gpg
-    gpg --dearmor -o "/etc/apt/keyrings/kubernetes-apt-keyring-\$KUBERNETES_VERSION_REPOSITORY.gpg" /tmp/kubernetes.gpg
     echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring-\$KUBERNETES_VERSION_REPOSITORY.gpg] https://pkgs.k8s.io/core:/stable:/\$KUBERNETES_VERSION_REPOSITORY/deb/ /" | \
         tee /etc/apt/sources.list.d/kubernetes.list
 fi
@@ -340,14 +335,22 @@ EOF
 
 function install_cni() {
     ssh -o StrictHostKeyChecking=no "$SSH_USER@$CONTROL_PLANE_IP" bash << 'EOF'
-curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+if ! command -v helm &> /dev/null; then
+    curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+fi
 
 kubectl create ns kube-flannel
 kubectl label --overwrite ns kube-flannel pod-security.kubernetes.io/enforce=privileged
 
-helm repo add flannel https://flannel-io.github.io/flannel
-helm repo update
-helm install flannel --set podCidr=10.244.0.0/16 --namespace kube-flannel flannel/flannel
+if ! helm repo list | grep -q '^flannel\s'; then
+    helm repo add flannel https://flannel-io.github.io/flannel
+    helm repo update
+fi
+
+helm install flannel \
+    --set podCidr=10.244.0.0/16 \
+    --namespace kube-flannel \
+    flannel/flannel
 EOF
 }
 
@@ -511,25 +514,255 @@ function remove_control_plane() {
     cleanup_node "$CONTROL_PLANE_IP"
 }
 
-function cleanup_node() {
+function deep_clean_node() {
     local node_ip=$1
     ssh -o StrictHostKeyChecking=no "$SSH_USER@$node_ip" bash << 'EOF'
+set -euo pipefail
+
+# Kill all kubernetes-related processes
+for proc in kubelet kube-apiserver kube-controller-manager kube-scheduler kube-proxy containerd docker flannel coredns; do
+    pkill -9 "$proc" || true
+done
+
+# Stop and disable services
+systemctl stop kubelet containerd docker || true
+systemctl disable kubelet containerd docker || true
+
+# Force kubeadm reset
+kubeadm reset -f || true
+
+# Clean up mounts
+for mount in $(mount | grep tmpfs | grep '/var/lib/kubelet' | awk '{ print $3 }'); do
+    umount -f "$mount" || true
+done
+
+for mount in $(mount | grep kubernetes); do
+    umount -f "$(echo "$mount" | awk '{print $3}')" || true
+done
+
+# Remove all kubernetes-related directories
+rm -rf \
+    /etc/kubernetes \
+    /var/lib/kubelet \
+    /var/lib/etcd \
+    /var/lib/dockershim \
+    /var/run/kubernetes \
+    /var/lib/cni \
+    /etc/cni \
+    /opt/cni \
+    /var/lib/containerd \
+    /var/lib/docker \
+    /etc/containerd \
+    /etc/docker \
+    $HOME/.kube \
+    /root/.kube
+
+# Clean up network namespaces that might be used by CoreDNS/pods
+ip netns list | grep -E 'cni-|coredns' | xargs -r ip netns delete
+
+# Clean up network interfaces
+ip link set docker0 down 2>/dev/null || true
+ip link delete docker0 2>/dev/null || true
+ip link set cni0 down 2>/dev/null || true
+ip link delete cni0 2>/dev/null || true
+ip link set flannel.1 down 2>/dev/null || true
+ip link delete flannel.1 2>/dev/null || true
+ip link set weave down 2>/dev/null || true
+ip link delete weave 2>/dev/null || true
+
+# Clean up iptables
+iptables-save | grep -v KUBE | grep -v CNI | grep -v FLANNEL | iptables-restore
+ip6tables-save | grep -v KUBE | grep -v CNI | grep -v FLANNEL | ip6tables-restore
+
+# Remove all container images
+crictl rmi --all 2>/dev/null || true
+docker system prune -af 2>/dev/null || true
+
+# Remove all K8s and container packages
+for pkg in kubectl kubeadm kubelet kubernetes-cni containerd.io containerd docker-ce docker-ce-cli docker-buildx-plugin docker-compose-plugin docker-ce-rootless-extras coredns; do
+    apt-mark unhold "$pkg" 2>/dev/null || true
+done
+
+# Force remove packages and their configurations
+apt-get remove --purge -y \
+    kubectl kubeadm kubelet \
+    kubernetes-cni containerd.io containerd \
+    docker-ce docker-ce-cli \
+    docker-buildx-plugin docker-compose-plugin \
+    docker-ce-rootless-extras || true
+
+apt-get autoremove --purge -y || true
+apt-get clean
+
+# Clean up package repositories
+rm -f /etc/apt/sources.list.d/kubernetes.list
+rm -f /etc/apt/sources.list.d/docker.list
+rm -f /etc/apt/keyrings/kubernetes*.gpg
+rm -f /etc/apt/keyrings/docker*.gpg
+
+# Remove binaries
+rm -f /usr/bin/kubectl /usr/bin/kubeadm /usr/bin/kubelet
+
+sed -i '/^net.bridge.bridge-nf-call-iptables = 1$/d' /etc/sysctl.conf
+sysctl -p
+
+# Restore original fstab if backup exists
+if [[ -f /etc/fstab.bak.* ]]; then
+    cp "$(ls -t /etc/fstab.bak.* | head -1)" /etc/fstab
+fi
+
+# Clean up systemd
+rm -f /etc/systemd/system/kubelet.service
+rm -f /etc/systemd/system/docker.service
+rm -f /etc/systemd/system/containerd.service
+rm -rf /etc/systemd/system/kubelet.service.d
+rm -rf /etc/systemd/system/docker.service.d
+rm -rf /etc/systemd/system/containerd.service.d
+
+systemctl daemon-reload
+
+# Remove any leftover process
+for proc in kubelet kube-apiserver kube-controller-manager kube-scheduler kube-proxy containerd dockerd docker-containerd flannel flanneld; do
+    killall -9 "$proc" || true
+done
+
+EOF
+}
+
+function verify_deep_clean() {
+    local node_ip=$1
+    local failed=false
+
+    log "Verifying services and processes on $node_ip"
+    ssh -o StrictHostKeyChecking=no "$SSH_USER@$node_ip" bash << 'EOF' || failed=true
+set -euo pipefail
+
+# Check for running services
+services_running=false
+for svc in kubelet containerd docker; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+        echo "Service still running: $svc"
+        services_running=true
+    fi
+done
+$services_running && exit 1
+
+# Check for K8s processes
+processes_running=false
+for proc in kubelet kube-apiserver kube-controller-manager kube-scheduler kube-proxy containerd dockerd flanneld; do
+    if pgrep -f "$proc" > /dev/null; then
+        echo "Process still running: $proc"
+        processes_running=true
+    fi
+done
+$processes_running && exit 1
+
+# Check for open ports
+ports_in_use=false
+for port in 6443 2379 2380 10250 10251 10252 10255 8472 51820 51821; do
+    if netstat -tuln | grep -q ":$port "; then
+        echo "Port still in use: $port"
+        ports_in_use=true
+    fi
+done
+$ports_in_use && exit 1
+
+# Check for remaining files/directories
+files_exist=false
+for path in \
+    /etc/kubernetes \
+    /var/lib/kubelet \
+    /var/lib/etcd \
+    /var/run/kubernetes \
+    /var/lib/dockershim \
+    /etc/cni \
+    /opt/cni \
+    /var/lib/cni \
+    /var/lib/containerd \
+    /var/lib/docker \
+    /etc/containerd \
+    /etc/docker \
+    $HOME/.kube \
+    /root/.kube; do
+    if [ -e "$path" ]; then
+        echo "Path still exists: $path"
+        files_exist=true
+    fi
+done
+$files_exist && exit 1
+
+# Check for network interfaces
+interfaces_exist=false
+for iface in docker0 cni0 flannel.1 weave; do
+    if ip link show "$iface" &>/dev/null; then
+        echo "Interface still exists: $iface"
+        interfaces_exist=true
+    fi
+done
+$interfaces_exist && exit 1
+
+# Check for kubernetes iptables rules
+if iptables-save | grep -qE 'KUBE|CNI|FLANNEL'; then
+    echo "Kubernetes iptables rules still exist"
+    exit 1
+fi
+
+# Check for installed packages
+packages_exist=false
+for pkg in kubectl kubeadm kubelet kubernetes-cni containerd.io docker-ce docker-ce-cli; do
+    if dpkg -l | grep -q "^ii.*$pkg"; then
+        echo "Package still installed: $pkg"
+        packages_exist=true
+    fi
+done
+$packages_exist && exit 1
+
+# Remove helm and all repos
+if command -v helm &> /dev/null; then
+    helm repo list | tail -n +2 | awk '{print $1}' | xargs -r helm repo remove
+    rm $(command -v helm)
+fi
+
+exit 0
+EOF
+
+    if $failed; then
+        error "Deep clean verification failed on $node_ip - some components still present"
+    else
+        log "Verification passed for $node_ip"
+    fi
+}
+
+function cleanup_node() {
+    local node_ip=$1
+
+    if [[ $NUKE == "true" ]]; then
+        log "Starting deep clean on $node_ip"
+        deep_clean_node "$node_ip"
+        log "Deep clean completed, starting verification"
+        verify_deep_clean "$node_ip"
+    else
+        log "Performing standard cleanup on $node_ip"
+        ssh -o StrictHostKeyChecking=no "$SSH_USER@$node_ip" bash << 'EOF'
+if [[ -f $HOME/.kube/config ]] && command -v helm &> /dev/null; then
+    helm repo list | tail -n +2 | awk '{print $1}' | xargs -r helm repo remove
+fi
+
 kubeadm reset -f
 rm -rf $HOME/.kube
 ip link delete cni0 || true
 ip link delete flannel.1 || true
 EOF
+    fi
 }
 
 function cleanup_cluster() {
-    if ! ssh -o StrictHostKeyChecking=no "$SSH_USER@$CONTROL_PLANE_IP" kubectl get nodes &>/dev/null; then
-        error "Cannot access the Kubernetes cluster"
+    local worker_nodes=""
+    if ssh -o StrictHostKeyChecking=no "$SSH_USER@$CONTROL_PLANE_IP" kubectl get nodes &>/dev/null; then
+        worker_nodes=$(ssh -o StrictHostKeyChecking=no "$SSH_USER@$CONTROL_PLANE_IP" \
+            kubectl get nodes -o custom-columns=IP:.status.addresses[0].address --no-headers | \
+            grep -v "$CONTROL_PLANE_IP") || true
     fi
-
-    local worker_nodes
-    worker_nodes=$(ssh -o StrictHostKeyChecking=no "$SSH_USER@$CONTROL_PLANE_IP" \
-        kubectl get nodes -o custom-columns=IP:.status.addresses[0].address --no-headers | \
-        grep -v "$CONTROL_PLANE_IP") || true
 
     for ip in $worker_nodes; do
         [[ -z $ip ]] && continue
@@ -539,10 +772,6 @@ function cleanup_cluster() {
 
     log "Cleaning up control plane"
     cleanup_node "$CONTROL_PLANE_IP"
-
-    if ssh -o StrictHostKeyChecking=no "$SSH_USER@$CONTROL_PLANE_IP" kubectl get nodes &>/dev/null; then
-        error "Cluster is still running after cleanup"
-    fi
 }
 
 function main() {

@@ -142,21 +142,14 @@ Some of the alternatives you could consider are:
 
 ## High Priority
 
-- Add support for nuking the whole cluster - not just kubeadm reset, remove all traces
-- Improve error handling and reporting
-- Add more input validation
 - Allow custom CIDR ranges
 - Add support for additional logging output to a file
 - Add dry-run mode for operations
 
 ## Medium Priority
 
-- Add automated etcd backup and restor
 - Add support for more CNI plugins: Calico, Cilium
-- Add support for customizing the kubelet configuration
-- More post-installation/upgrade checks
 - Cluster configuration templating
-- Add support for MetalLB
 - Add support for HA control plane
 - Assume presence of the flag equals true (e.g. --noninteractive) if the flag is present
 - Add k3s support
@@ -165,4 +158,3 @@ Some of the alternatives you could consider are:
 ## Low Priority
 
 - Air-gapped environments support
-- Add performance tuning options
