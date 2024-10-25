@@ -42,7 +42,7 @@ sudo chmod +x /usr/local/bin/kubelift
 
 ```bash
 kubelift --help
-Usage: kubelift [operation] [options...]
+Usage: kubelift <operation> [options...]
 Operations:
     create                                  Create a new Kubernetes cluster
     upgrade                                 Upgrade an existing Kubernetes cluster
