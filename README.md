@@ -64,12 +64,12 @@ Options:
 
 ```bash
 ./kubelift.sh create \
-    --noninteractive <true|false> \
+    --noninteractive <bool> \
     --ssh-user <username> \
     --kubernetes-version <version> \
     --control-plane-ip <ip> \
     --worker-ips <ip1,ip2,...> \
-    --enable-control-plane-workloads <true|false>
+    --enable-control-plane-workloads <bool>
 ```
 
 The create operation will:
@@ -89,7 +89,7 @@ The create operation will:
 
 ```bash
 ./kubelift.sh upgrade \
-    --noninteractive <true|false> \
+    --noninteractive <bool> \
     --ssh-user <username> \
     --kubernetes-version <version> \
     --control-plane-ip <ip>
@@ -108,10 +108,10 @@ The upgrade operation will:
 
 ```bash
 ./kubelift.sh cleanup \
-    --noninteractive <true|false> \
+    --noninteractive <bool> \
     --ssh-user <username> \
     --control-plane-ip <ip> \
-    --nuke <true|false> # Optional
+    --nuke <bool> # Optional
 ```
 
 The cleanup operation will:
