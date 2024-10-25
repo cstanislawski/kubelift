@@ -394,6 +394,18 @@ function upgrade_node_components() {
     ssh -o StrictHostKeyChecking=no "$SSH_USER@$node_ip" bash << EOF
 set -euo pipefail
 
+KUBERNETES_VERSION="$KUBERNETES_VERSION"
+KUBERNETES_VERSION_REPOSITORY="v\${KUBERNETES_VERSION%.*}"
+
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL "https://pkgs.k8s.io/core:/stable:/\$KUBERNETES_VERSION_REPOSITORY/deb/Release.key" | \
+    gpg --dearmor --yes -o "/etc/apt/keyrings/kubernetes-apt-keyring-\$KUBERNETES_VERSION_REPOSITORY.gpg"
+
+echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring-\$KUBERNETES_VERSION_REPOSITORY.gpg] https://pkgs.k8s.io/core:/stable:/\$KUBERNETES_VERSION_REPOSITORY/deb/ /" | \
+    tee /etc/apt/sources.list.d/kubernetes.list
+
+apt-get update
+
 apt-mark unhold kubeadm && apt-get install -y kubeadm=$KUBERNETES_VERSION-* && apt-mark hold kubeadm
 
 if $is_control_plane; then
